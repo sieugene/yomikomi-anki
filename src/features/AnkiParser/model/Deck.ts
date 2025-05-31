@@ -1,68 +1,20 @@
-import type { Database, SqlJsStatic } from "sql.js";
+import type { SqlJsStatic } from "sql.js";
 import type { Extractor } from "./Extractor";
 import { DB_FILES } from "../lib/constants";
 import { FileStoreManager } from "@/features/StoreManager/model/FileStoreManager";
+import { Db } from "./db/Db";
+import Anki21bDb from "./db/Anki21bDb";
+import Anki21Db from "./db/Anki21Db";
+import Anki2Db from "./db/Anki2Db";
 
-export type Media = {
+type Media = {
   fileName: string;
   getBlob: () => Promise<string>;
   revokeBlob: () => void;
 };
 
-export type Note = {
-  id: number;
-  guid: string;
-  mid: number;
-  mod: number;
-  usn: number;
-  tags: string;
-  flds: string;
-  sfld: string;
-  csum: number;
-  flags: number;
-  data: string;
-  cards: Card[];
-};
-
-export type Card = {
-  id: number;
-  nid: number;
-  did: number;
-  ord: number;
-  mod: number;
-  usn: number;
-  type: number;
-  queue: number;
-  due: number;
-  ivl: number;
-  factor: number;
-  reps: number;
-  lapses: number;
-  left: number;
-  odue: number;
-  odid: number;
-  flags: number;
-  data: string;
-};
-
-export type Collection = {
-  id?: number;
-  crt?: number;
-  mod?: number;
-  scm?: number;
-  ver?: number;
-  dty?: number;
-  usn?: number;
-  ls?: number;
-  conf?: Record<string, unknown>;
-  models?: Record<string, unknown>;
-  decks?: Record<string, unknown>;
-  dconf?: Record<string, unknown>;
-  tags?: Record<string, unknown>;
-};
-
 export class Deck {
-  private db: Database | null = null;
+  private db: Db | null = null;
   private fileManager = new FileStoreManager();
 
   constructor(
@@ -72,9 +24,21 @@ export class Deck {
   ) {}
 
   async init(): Promise<void> {
-    const itemKey = `${this.deckName}-db-file-${DB_FILES.LEGACY}`;
-    await this.syncCacheFile(itemKey, DB_FILES.LEGACY, this.deckName);
+    let TARGET_DB_V = DB_FILES.LEGACY;
+    const files = await this.extractor.listFiles();
+  
+    if (files.includes(DB_FILES.MODERN)) {
+      TARGET_DB_V = DB_FILES.MODERN;
+    } else if (files.includes(DB_FILES.LEGACY)) {
+      TARGET_DB_V = DB_FILES.LEGACY;
+    } else if (files.includes(DB_FILES.OLD)) {
+      TARGET_DB_V = DB_FILES.OLD;
+    }
+
+    const itemKey = `${this.deckName}-db-file-${TARGET_DB_V}`;
+    await this.syncCacheFile(itemKey, TARGET_DB_V, this.deckName);
     const dbFile = await this.fileManager.getAsFile(itemKey);
+  
     if (!dbFile) {
       throw new Error(`Failed to retrieve database file for key: ${itemKey}`);
     }
@@ -88,161 +52,28 @@ export class Deck {
       );
     }
 
-    this.db = new this.sqlClient.Database(new Uint8Array(arrayBuffer));
-  }
-
-  async getNotes(): Promise<Record<number, Note>> {
-    if (!this.db) throw new Error("Database not initialized");
-    const notes: Record<number, Note> = {};
-
-    const noteRows = this.db.exec("SELECT * FROM notes")[0]?.values || [];
-    const cardRows = this.db.exec("SELECT * FROM cards")[0]?.values || [];
-
-    for (const row of noteRows) {
-      const [id, guid, mid, mod, usn, tags, flds, sfld, csum, flags, data] =
-        row as [
-          number,
-          string,
-          number,
-          number,
-          number,
-          string,
-          string,
-          string,
-          number,
-          number,
-          string
-        ];
-      notes[id] = {
-        id,
-        guid,
-        mid,
-        mod,
-        usn,
-        tags,
-        flds,
-        sfld,
-        csum,
-        flags,
-        data,
-        cards: [],
-      };
+    switch (TARGET_DB_V) {
+      case DB_FILES.MODERN:
+        this.db = new Anki21bDb(this.sqlClient, arrayBuffer);
+        break;
+      case DB_FILES.LEGACY:
+        this.db = new Anki21Db(this.sqlClient, arrayBuffer);
+        break;
+      case DB_FILES.OLD:
+        this.db = new Anki2Db(this.sqlClient, arrayBuffer);
     }
-
-    for (const row of cardRows) {
-      const [
-        id,
-        nid,
-        did,
-        ord,
-        mod,
-        usn,
-        type,
-        queue,
-        due,
-        ivl,
-        factor,
-        reps,
-        lapses,
-        left,
-        odue,
-        odid,
-        flags,
-        data,
-      ] = row as [
-        number,
-        number,
-        number,
-        number,
-        number,
-        number,
-        number,
-        number,
-        number,
-        number,
-        number,
-        number,
-        number,
-        number,
-        number,
-        number,
-        number,
-        string
-      ];
-      if (notes[nid]) {
-        notes[nid].cards.push({
-          id,
-          nid,
-          did,
-          ord,
-          mod,
-          usn,
-          type,
-          queue,
-          due,
-          ivl,
-          factor,
-          reps,
-          lapses,
-          left,
-          odue,
-          odid,
-          flags,
-          data,
-        });
-      }
-    }
-
-    return notes;
   }
 
-  async getCollection(): Promise<Collection> {
+  async getCollectedData() {
     if (!this.db) throw new Error("Database not initialized");
-    const res = this.db.exec("SELECT * FROM col");
-    const columns = res[0]?.columns || [];
-    const values = res[0]?.values?.[0] || [];
-
-    const collection: Collection = {};
-    columns.forEach((column: string, index: number) => {
-      const value = values[index];
-      const key = column as keyof Collection;
-
-      if (
-        column === "conf" ||
-        column === "models" ||
-        column === "decks" ||
-        column === "dconf" ||
-        column === "tags"
-      ) {
-        const jsonKey = key as "conf" | "models" | "decks" | "dconf" | "tags";
-        const strValue = typeof value === "string" ? value : "{}";
-        try {
-          collection[jsonKey] = JSON.parse(strValue);
-        } catch {
-          collection[jsonKey] = {};
-        }
-      } else {
-        const numericKey = key as Exclude<
-          keyof Collection,
-          "conf" | "models" | "decks" | "dconf" | "tags"
-        >;
-        if (value === null || value === undefined) {
-          collection[numericKey] = undefined;
-        } else if (typeof value === "number") {
-          collection[numericKey] = value;
-        } else {
-          const numValue = typeof value === "string" ? parseFloat(value) : NaN;
-          collection[numericKey] = isNaN(numValue) ? undefined : numValue;
-        }
-      }
-    });
-
-    return collection;
-  }
-
-  async getModels(): Promise<Record<string, unknown>> {
-    const col = await this.getCollection();
-    return col.models || {};
+    const mediaMap = await this.getMedia();
+    const notesRaw = await this.db.getNotes();
+    const models = await this.db.getModels();
+    return {
+      notesRaw,
+      models,
+      mediaMap,
+    };
   }
 
   async getMedia(mediaFileName = "media"): Promise<Media[]> {

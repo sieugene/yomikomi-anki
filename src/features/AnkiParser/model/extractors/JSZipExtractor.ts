@@ -24,8 +24,10 @@ export class JSZipExtractor implements Extractor {
     if (!file) {
       throw new Error(`File ${fileName} not found`);
     }
+
     const mediaFile = await file.async("string");
     if (!mediaFile) throw new Error(`Failed to prepare media file to string`);
+
     const mediaArray = parseAnkiMediaJson(mediaFile);
     return mediaArray;
   }
