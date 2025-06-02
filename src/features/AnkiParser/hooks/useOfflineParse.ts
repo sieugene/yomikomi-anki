@@ -13,7 +13,6 @@ export const useOfflineParse = () => {
 
     const extractor = new JSZipExtractor(file);
     await extractor.init();
-
     await handleUpload(extractor, file);
   };
 

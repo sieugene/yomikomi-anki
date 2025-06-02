@@ -43,6 +43,7 @@ export class CollectionStore {
   }
 
   public async add(ankiDeck: File) {
+    
     const uuid = uuidv4();
     const name = ankiDeck?.name || "unkown file";
     await this.storeManager.saveFile(ankiDeck, uuid);
